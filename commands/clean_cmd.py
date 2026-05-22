@@ -41,12 +41,45 @@ VERIFY
 """
 import boto3
 
-from commands._common import parse_kv
+from commands._common import parse_kv, tags_to_dict
 
 
 def _find_targets(tag_key, tag_val):
     """Return {"ec2": [...], "volume": [...]} matching tag in non-terminal state."""
-    raise NotImplementedError("TODO: implement _find_targets — see test_clean.py")
+    ec2 = boto3.client("ec2", region_name="us-east-1")
+
+    targets = {
+        "ec2": [],
+        "volume": [],
+    }
+
+    # Find EC2 instances matching tag
+    resp = ec2.describe_instances()
+
+    for reservation in resp.get("Reservations", []):
+        for instance in reservation.get("Instances", []):
+            tags = tags_to_dict(instance.get("Tags", []))
+
+            if tags.get(tag_key) == tag_val:
+                state = instance.get("State", {}).get("Name")
+
+                # Skip already-gone instances
+                if state not in ("terminated", "shutting-down"):
+                    targets["ec2"].append(instance["InstanceId"])
+
+    # Find EBS volumes matching tag
+    vol_resp = ec2.describe_volumes()
+
+    for volume in vol_resp.get("Volumes", []):
+        tags = tags_to_dict(volume.get("Tags", []))
+
+        if tags.get(tag_key) == tag_val:
+            # Only delete detached / available volumes
+            if volume.get("State") == "available":
+                targets["volume"].append(volume["VolumeId"])
+
+    return targets
+    # raise NotImplementedError("TODO: implement _find_targets — see test_clean.py")
 
 
 def run(args):
@@ -56,4 +89,36 @@ def run(args):
         args.tag    — "key=value" string (REQUIRED)
         args.apply  — bool, must be True to actually delete (default False = dry-run)
     """
-    raise NotImplementedError("TODO: implement run() — see module docstring")
+    key, value = parse_kv(args.tag)
+    targets = _find_targets(key, value)
+
+    total = sum(len(ids) for ids in targets.values())
+
+    if total == 0:
+        print("Nothing to clean")
+        return
+
+    # Default: dry-run only
+    if not args.apply:
+        print(f"dry-run: found {total} resource(s) for {key}={value}")
+
+        for iid in targets["ec2"]:
+            print(f"Would terminate EC2 {iid}")
+
+        for vid in targets["volume"]:
+            print(f"Would delete volume {vid}")
+
+        print("dry-run — pass --apply to actually clean resources")
+        return
+
+    # Apply mode: actually terminate/delete
+    ec2 = boto3.client("ec2", region_name="us-east-1")
+
+    for iid in targets["ec2"]:
+        ec2.terminate_instances(InstanceIds=[iid])
+        print(f"Terminated EC2 {iid}")
+
+    for vid in targets["volume"]:
+        ec2.delete_volume(VolumeId=vid)
+        print(f"Deleted volume {vid}")
+    # raise NotImplementedError("TODO: implement run() — see module docstring")
