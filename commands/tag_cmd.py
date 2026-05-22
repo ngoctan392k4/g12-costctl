@@ -49,23 +49,57 @@ from commands._common import parse_kv
 
 def _to_tags(set_args):
     """Convert ['k1=v1', 'k2=v2'] to [{'Key':'k1','Value':'v1'}, ...]."""
-    raise NotImplementedError("TODO: implement _to_tags using parse_kv")
+    tags = []
+    for item in set_args:
+        k, v = parse_kv(item)
+        tags.append({"Key": k, "Value": v})
+    return tags
+    # raise NotImplementedError("TODO: implement _to_tags using parse_kv")
 
 
 def _tag_ec2(rid, tags):
-    raise NotImplementedError("TODO: implement _tag_ec2 using create_tags")
+    ec2 = boto3.client("ec2", region_name="us-east-1")
+    ec2.create_tags(Resources=[rid], Tags=tags)
+    # raise NotImplementedError("TODO: implement _tag_ec2 using create_tags")
 
 
 def _tag_rds(rid, tags):
-    raise NotImplementedError("TODO: implement _tag_rds — remember to fetch ARN first")
+    rds = boto3.client("rds", region_name="us-east-1")
+
+    resp = rds.describe_db_instances(DBInstanceIdentifier=rid)
+    arn = resp["DBInstances"][0]["DBInstanceArn"]
+
+    rds.add_tags_to_resource(ResourceName=arn, Tags=tags)
+    # raise NotImplementedError("TODO: implement _tag_rds — remember to fetch ARN first")
 
 
 def _tag_s3(rid, tags):
-    raise NotImplementedError("TODO: implement _tag_s3 — MERGE with existing tags, don't replace")
+    s3 = boto3.client("s3", region_name="us-east-1")
+
+    try:
+        resp = s3.get_bucket_tagging(Bucket=rid)
+        existing = resp.get("TagSet", [])
+    except ClientError:
+        existing = []
+
+    merged = {t["Key"]: t["Value"] for t in existing}
+    for tag in tags:
+        merged[tag["Key"]] = tag["Value"]
+
+    tagset = [{"Key": k, "Value": v} for k, v in merged.items()]
+
+    s3.put_bucket_tagging(
+        Bucket=rid,
+        Tagging={"TagSet": tagset},
+    )
+
+    # raise NotImplementedError("TODO: implement _tag_s3 — MERGE with existing tags, don't replace")
 
 
 def _tag_volume(rid, tags):
-    raise NotImplementedError("TODO: implement _tag_volume using create_tags")
+    ec2 = boto3.client("ec2", region_name="us-east-1")
+    ec2.create_tags(Resources=[rid], Tags=tags)
+    # raise NotImplementedError("TODO: implement _tag_volume using create_tags")
 
 
 DISPATCH = {
@@ -84,4 +118,10 @@ def run(args):
         args.id    — resource identifier
         args.set   — list[str], each "key=value"
     """
-    raise NotImplementedError("TODO: implement run() — see module docstring")
+    tags = _to_tags(args.set)
+
+    DISPATCH[args.type](args.id, tags)
+
+    tag_text = ", ".join(f"{t['Key']}={t['Value']}" for t in tags)
+    print(f"Applied {len(tags)} tag(s) to {args.type} {args.id}: {tag_text}")
+    # raise NotImplementedError("TODO: implement run() — see module docstring")
